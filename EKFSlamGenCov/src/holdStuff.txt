@@ -1,0 +1,161 @@
+
+
+    if (keypoints.size()>MIN_KEYPOINTS){
+    	cv::Mat descriptors;
+
+		this->feature_descriptor->compute(img, keypoints, descriptors);
+
+		std::vector<cv::Mat_<double>> real_world_ponts  = std::vector<cv::Mat_<double>>();
+		this->get3DPointsFromFeatures( keypoints, depth_img, real_world_ponts);
+    	//foreach(cv::Point3f const point, real_world_ponts){ std::cout << point.x<<";"<<point.y<<";"<<point.z<<"\n";}
+
+    	if (this->prev_keypoints.size()>MIN_KEYPOINTS){
+    		std::vector< cv::DMatch > matches;
+    		this->feature_matcher.match( this->prev_descriptors, descriptors, matches );
+
+			#ifdef SHOW_MATCHED_KEYPOINTS
+    			std::vector< cv::DMatch > accepted_matches;
+			#endif
+    		std::vector<cv::Point2f> matched_points;
+    		std::vector<cv::Point3f> prev_matched_real_world_points;
+
+
+    		for (int loop=0; loop < matches.size(); loop++){
+    			const cv::DMatch match = matches[loop];
+    			if (match.distance < MATCH_DIST_THRESH){
+    				cv::Mat hold3dPt = this->prev_real_world_points[match.queryIdx];
+    				if (hold3dPt.at<double>(0,2)<=0.001){continue;}
+					#ifdef SHOW_MATCHED_KEYPOINTS
+    					accepted_matches.push_back(match);
+					#endif
+
+    				cv::Point3f transformedRWPoint = this->transformPointWorldSystem(hold3dPt);
+
+					#ifdef SHOW_CONFIRM_REPROJECTION
+						std::vector<cv::Point2f> testReprojectedPoints= std::vector<cv::Point2f>();
+						std::vector<cv::Point3f> pointToCvt = std::vector<cv::Point3f>();
+						pointToCvt.push_back(transformedRWPoint);
+
+						cv::projectPoints(pointToCvt, this->rvec, this->tvec, this->CAMERA_CALIB_MATRIX, cv::noArray(), testReprojectedPoints);
+
+						std::cout << testReprojectedPoints[0]<<";"<<this->prev_keypoints[match.queryIdx].pt<<";"<<transformedRWPoint<<";\n";
+					#endif
+
+					matched_points.push_back(keypoints[match.trainIdx].pt);
+					prev_matched_real_world_points.push_back(transformedRWPoint);
+        			//matched_real_world_features_prev.push_back(this->prev_real_world_features[match.trainIdx]);
+    			}
+    		}
+
+
+			#ifdef SHOW_MATCHED_KEYPOINTS
+						cv::Mat img_matches;
+						cv::drawMatches( this->prevImg, this->prev_keypoints, img, keypoints,
+								accepted_matches, img_matches, cv::Scalar::all(-1), cv::Scalar::all(-1),
+								std::vector<char>(), cv::DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS );
+
+						cv::imshow("Matched Features", img_matches );
+			#endif
+
+
+			cv::solvePnPRansac(prev_matched_real_world_points, matched_points, this->CAMERA_CALIB_MATRIX, cv::noArray(), this->rvec, this->tvec);
+			cv::Rodrigues(this->rvec, this->camera_R_BeforeRefine);
+			this->tvec = -this->camera_R_BeforeRefine.t()*this->tvec;
+			this->camera_R_BeforeRefine = this->camera_R_BeforeRefine.t();
+			#ifdef SHOW_EST_RT
+		    std::cout << "t = "<<  "\n "  << this->tvec.t() << "\n\n";
+		    //std::cout << "r = "<<  "\n "  << this->rvec << "\n\n";
+		    std::cout << "R = "<<  "\n "  << this->camera_R_BeforeRefine << "\n\n";
+		    //std::cout << "t_inv = "<<  "\n "  << -this->camera_R_BeforeRefine.t()*this->tvec << "\n\n";
+			#endif
+
+    	}
+		#ifdef SHOW_MATCHED_KEYPOINTS
+    		this->prevImg = img;
+    	#endif
+		this->prev_real_world_points = real_world_ponts;
+		this->prev_keypoints = keypoints;
+    	this->prev_descriptors = descriptors;
+    }
+
+
+#ifdef RENDER_ANY_IMAGES
+	cv::waitKey(1);
+#endif
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	this->currentWorldData = WorldData();
+    //this->feature_detector->detect( img, this->currentWorldData.keypoints );
+	//this->feature_descriptor->compute(img, this->currentWorldData.keypoints, this->currentWorldData.descriptors);
+	this->feature_detector->detectAndCompute( img, cv::noArray(), this->currentWorldData.keypoints, 
+											this->currentWorldData.descriptors );
+	this->matches.clear();
+    this->feature_matcher.knnMatch( this->prevWorldData.descriptors, this->currentWorldData.descriptors, this->matches, 2 );
+
+	std::vector<cv::Point2f> matched_points;
+    std::vector<cv::Point3f> prev_matched_real_world_points;
+	cv::Mat global_candidates_desc;
+	foreach(const std::vector<cv::DMatch> match, this->matches){
+		if (match[0].distance < 0.2 && match[0].distance<match[1].distance-0.2) {
+			cv::Mat hold3dPt = this->prevWorldData.real_world_points[match[0].queryIdx];
+			cv::Point3f transformedRWPoint = this->transformPointWorldSystem(hold3dPt);
+			prev_matched_real_world_points.push_back(transformedRWPoint);
+			global_candidates_desc.push_back(prevWorldData.descriptors.row(match[0].queryIdx));
+
+			matched_points.push_back(this->currentWorldData.keypoints[match[0].trainIdx].pt);
+		}
+	}
+
+	if (matched_points.size() < 20){
+		return;
+	}
+
+	this->get3DPointsFromFeatures( this->currentWorldData.keypoints, depth_img, this->currentWorldData.real_world_points);
+
+	cv::solvePnPRansac(prev_matched_real_world_points, matched_points, this->CAMERA_CALIB_MATRIX, cv::noArray(), this->rvec, this->tvec);
+	cv::Rodrigues(this->rvec, this->camera_R_BeforeRefine);
+	this->tvec = -this->camera_R_BeforeRefine.t()*this->tvec;
+	this->camera_R_BeforeRefine = this->camera_R_BeforeRefine.t();
+
+	std::cout << "t = "<<  "\n "  << this->tvec.t() << "\n\n";
+	std::cout << "R = "<<  "\n "  << this->camera_R_BeforeRefine << "\n\n";
+
+
+	if (this->globalWorldData.descriptors.rows == 0){
+		this->globalWorldData.descriptors = global_candidates_desc;
+		this->globalWorldData.real_world_points = prev_matched_real_world_points;
+	} else {
+		this->matches.clear();
+		this->feature_matcher.knnMatch( global_candidates_desc, this->globalWorldData.descriptors, this->matches, 2 );
+		std::vector<int> observation_indicies_global, observation_indicies_prev;
+		foreach(const std::vector<cv::DMatch> match, this->matches){
+			if ( match[0].distance < 0.15 && match[0].distance<match[1].distance-0.25 ) {
+				observation_indicies_global.push_back(match[0].queryIdx);
+				observation_indicies_prev.push_back(match[0].trainIdx);
+			} else if ( match[0].distance > 0.4 ) {
+				this->globalWorldData.descriptors.push_back(global_candidates_desc.row(match[0].queryIdx));
+				this->globalWorldData.real_world_points.push_back(prev_matched_real_world_points[match[0].queryIdx]);
+			} 
+		}
+	}
+
+
+	this->prevWorldData = this->currentWorldData;

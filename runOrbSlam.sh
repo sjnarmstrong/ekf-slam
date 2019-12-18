@@ -1,0 +1,1 @@
+./Examples/RGB-D/rgbd_tum Vocabulary/ORBvoc.txt Examples/RGB-D/TUM1.yaml ~/Documents/Assignment\ 4/Code/Datasets/rgbd_dataset_freiburg1_desk/ ~/Documents/Assignment\ 4/Code/Datasets/rgbd_dataset_freiburg1_desk/associationsORB.txt
